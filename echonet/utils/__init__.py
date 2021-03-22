@@ -11,7 +11,8 @@ import tqdm
 
 from . import video
 from . import segmentation
-
+from . import segmentation_rv
+from . import model
 
 def loadvideo(filename: str) -> np.ndarray:
     """Loads a video from a file.

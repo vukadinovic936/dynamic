@@ -9,7 +9,9 @@ import numpy as np
 import skimage.draw
 import torchvision
 import echonet
+import h5py
 
+import pdb
 
 class Echo(torchvision.datasets.VisionDataset):
     """EchoNet-Dynamic Dataset.
@@ -270,6 +272,290 @@ class Echo(torchvision.datasets.VisionDataset):
         """Additional information to add at end of __repr__."""
         lines = ["Target type: {target_type}", "Split: {split}"]
         return '\n'.join(lines).format(**self.__dict__)
+
+class Echo_RV(torchvision.datasets.VisionDataset):
+    """EchoNet-Dynamic RV Dataset.
+
+    Args:
+        root (string): Root directory of dataset (defaults to `echonet.config.DATA_DIR_LIST`)
+        split (string): One of {``train'', ``val'', ``test'', ``all'', or ``external_test''}
+        target_type (string or list, optional): Type of target to use,
+            ``Filename'', ``EF'', ``EDV'', ``ESV'', ``LargeIndex'',
+            ``SmallIndex'', ``LargeFrame'', ``SmallFrame'', ``LargeTrace'',
+            or ``SmallTrace''
+            Can also be a list to output a tuple with all specified target types.
+            The targets represent:
+                ``Filename'' (string): filename of video
+                ``EF'' (float): ejection fraction
+                ``EDV'' (float): end-diastolic volume
+                ``ESV'' (float): end-systolic volume
+                ``LargeIndex'' (int): index of large (diastolic) frame in video
+                ``SmallIndex'' (int): index of small (systolic) frame in video
+                ``LargeFrame'' (np.array shape=(3, height, width)): normalized large (diastolic) frame
+                ``SmallFrame'' (np.array shape=(3, height, width)): normalized small (systolic) frame
+                ``LargeTrace'' (np.array shape=(height, width)): left ventricle large (diastolic) segmentation
+                    value of 0 indicates pixel is outside left ventricle
+                             1 indicates pixel is inside left ventricle
+                ``SmallTrace'' (np.array shape=(height, width)): left ventricle small (systolic) segmentation
+                    value of 0 indicates pixel is outside left ventricle
+                             1 indicates pixel is inside left ventricle
+            Defaults to ``EF''.
+        mean (int, float, or np.array shape=(3,), optional): means for all (if scalar) or each (if np.array) channel.
+            Used for normalizing the video. Defaults to 0 (video is not shifted).
+        std (int, float, or np.array shape=(3,), optional): standard deviation for all (if scalar) or each (if np.array) channel.
+            Used for normalizing the video. Defaults to 0 (video is not scaled).
+        length (int or None, optional): Number of frames to clip from video. If ``None'', longest possible clip is returned.
+            Defaults to 16.
+        period (int, optional): Sampling period for taking a clip from the video (i.e. every ``period''-th frame is taken)
+            Defaults to 1.
+        max_length (int or None, optional): Maximum number of frames to clip from video (main use is for shortening excessively
+            long videos when ``length'' is set to None). If ``None'', shortening is not applied to any video.
+            Defaults to 250.
+        clips (int, optional): Number of clips to sample. Main use is for test-time augmentation with random clips.
+            Defaults to 1.
+        pad (int or None, optional): Number of pixels to pad all frames on each side (used as augmentation).
+            and a window of the original size is taken. If ``None'', no padding occurs.
+            Defaults to ``None''.
+        noise (float or None, optional): Fraction of pixels to black out as simulated noise. If ``None'', no simulated noise is added.
+            Defaults to ``None''.
+        target_transform (callable, optional): A function/transform that takes in the target and transforms it.
+        external_test_location (string): Path to videos to use for external testing.
+    """
+
+    def __init__(self, root=None,
+                 split="train",
+                 mean=0., std=1.,
+                 length=32, max_length=512,
+                 period=1,
+                 fuzzy_aug=False,
+                 external_test_location=None):
+        super().__init__(root)
+
+        if root is None:
+            root = echonet.config.DATA_DIR_LIST
+        # self.root = pathlib.Path(root)
+        self.root = root
+        self.split = split
+        self.mean = mean
+        self.std = std
+        self.length = length
+        self.max_length = max_length
+        self.period = period
+        self.fuzzy_aug = fuzzy_aug
+
+        self.external_test_location = external_test_location
+
+        # preprocess dataset, save in h5 of the same folder
+        for data_path in self.root:
+            self.preprocess_dataset(data_path)
+        if self.external_test_location:
+            self.preprocess_dataset(self.external_test_location, external_test=True)
+
+        # load h5 file
+        self.data_list = []
+        self.subj_list = []
+        self.subj_list_count = []
+        self.subj_list_count_acc = [0]
+        data_path_list = [self.external_test_location] if self.external_test_location else self.root
+        for data_path in data_path_list:
+            self.data_list.append(h5py.File(os.path.join(data_path, 'preprocessed.h5'), 'r'))
+            self.subj_list.append(np.load(os.path.join(data_path, 'subj_list.npy'), allow_pickle=True).item()[split])
+            self.subj_list_count.append(len(self.subj_list[-1]))
+            self.subj_list_count_acc.append(self.subj_list_count_acc[-1]+self.subj_list_count[-1])
+        print('Total number of videos', self.__len__())
+
+    def __len__(self):
+        return np.sum(self.subj_list_count)
+
+    def preprocess_dataset(self, data_path, external_test=False):
+        # check whether have preprocessed h5 file
+        h5_path = os.path.join(data_path, 'preprocessed.h5')
+        if os.path.exists(h5_path):
+            print('Exist preprocessed.h5 for ', data_path)
+            return
+        video_path = os.path.join(data_path, 'Videos')
+        mask_path = os.path.join(data_path, 'Tracings')
+        file_path = os.path.join(data_path, 'FileList.csv')
+        if not os.path.exists(video_path):
+            raise ValueError('Missing video folder')
+        if not os.path.exists(mask_path):
+            raise ValueError('Missing mask folder')
+        # prepare h5 file in dict
+        data_dict = {}    # subj_id: split, mask index, mask names, video name
+        # with FileList.csv of name and split
+        if os.path.exists(file_path):
+            file = pd.read_csv(file_path)
+            for i in tqdm.tqdm(range(len(file))):
+                subj_id = file.loc[i, 'FileName']
+                split = file.loc[i, 'Split'].lower()
+                subj_mask_paths = glob.glob(os.path.join(mask_path, subj_id + '*.png'))
+                subj_video_path = os.path.join(video_path, subj_id + '.avi')
+                if os.path.exists(subj_video_path) and len(subj_mask_paths) > 0:  # exist video and mask
+                    if subj_id in data_dict:
+                        print(subj_id)
+                        continue
+                    subj_list[split].append(subj_id)
+                    mask_idxes = []
+                    for j, subj_mask_path in enumerate(subj_mask_paths):
+                        mask_idx = int(os.path.basename(subj_mask_path).strip('.png').split('_')[1])
+                        mask_idxes.append(mask_idx)
+                    data_dict[subj_id] = {'split': split, 'mask_paths': subj_mask_paths, 'video_path': subj_video_path, 'mask_idx': mask_idxes}
+        # don't have FileList.csv
+        else:
+            subj_video_paths = glob.glob(os.path.join(video_path, '*.avi'))
+            for i, subj_video_path in enumerate(subj_video_paths):
+                #pdb.set_trace()
+                subj_id = os.path.basename(subj_video_path).split('.')[0]
+                if external_test:
+                    split = 'test'
+                else:
+                    if np.random.rand() < 0.2:
+                        split = 'val'
+                    else:
+                        split = 'train'
+                subj_mask_paths = glob.glob(os.path.join(mask_path, subj_id + '*.png'))
+                if len(subj_mask_paths) > 0:
+                    subj_list[split].append(subj_id)
+                    mask_idxes = []
+                    for j, subj_mask_path in enumerate(subj_mask_paths):
+                        mask_idx = int(os.path.basename(subj_mask_path).strip('.png').split('_')[1])
+                        mask_idxes.append(mask_idx)
+                    data_dict[subj_id] = {'split': split, 'mask_paths': subj_mask_paths, 'video_path': subj_video_path, 'mask_idx': mask_idxes}
+        print('Finished preparing', data_path)
+        print('Number of videos', len(data_dict))
+
+        # save as h5 file
+        h5_file = h5py.File(h5_path)
+        mean = np.array([28.951515,28.914696,28.896002], dtype = np.float32)
+        std = np.array([47.857174,47.831146,47.798138], dtype = np.float32)
+        size = (112, 112)
+
+        for subj_id in tqdm.tqdm(data_dict):
+            masks = []
+            for subj_mask_path in data_dict[subj_id]['mask_paths']:
+                mask = sci.imread(subj_mask_path)
+                if len(mask.shape) == 3:
+                    mask = mask[np.newaxis,:,:,0]
+                masks.append(mask)
+            masks = np.concatenate(masks, 0)
+            masks = masks / 255.0
+
+            video = echonet.utils.loadvideo(data_dict[subj_id]['video_path']).astype(np.float32)
+            video_norm = (video - mean.reshape(3,1,1,1)) / std.reshape(3,1,1,1)
+
+            if video_norm.shape[2:] != size or masks.shape[1:] != size:
+                print(subj_id, ' video or mask do not have the expected size')
+                continue
+
+            h5_file.create_dataset(subj_id+'/masks', data=masks)
+            h5_file.create_dataset(subj_id+'/video', data=video_norm)
+            h5_file.create_dataset(subj_id+'/mask_idx', data=data_dict[subj_id]['mask_idx'])
+
+            np.save(os.path.join(data_path, 'subj_list.npy'), subj_list)
+        print('Finished saving preprocessed h5 file', data_path)
+
+    def __getitem__(self, idx):
+        pdb.set_trace()
+        data_path_list = [self.external_test_location] if self.external_test_location else self.root
+        for data_path in data_path_list:
+            if idx < self.subj_list_count_acc[dataset_idx+1]:
+                break
+        subj_id = self.subj_list[idx-self.subj_list_count_acc[dataset_idx]]
+        video = np.array(self.data[dataset_idx][subj_id]['video'])
+        masks = np.array(self.data[dataset_idx][subj_id]['masks'])
+        mask_idx = np.array(self.data[dataset_idx][subj_id]['mask_idx'])
+
+        # select video period
+        if self.split == 'train':
+            start = np.random.choice(self.period)
+        else:
+            start = 0
+        video = video[:,start::self.period]
+        mask_idx = (mask_idx / self.period).astype(int)
+        video_length = video.shape[1]
+        mask_idx = np.where(mask_idx>=video_length, video_length-1, mask_idx)
+
+        if video_length < self.length:
+            pad = np.tile(video[:,-1:,...], (1,self.length-video_length,1,1))
+            video = np.concatenate([video, pad], axis=1)
+            video_length = self.length
+
+        # sort masks
+        masks, mask_idx = self.sort_mask(masks, mask_idx)
+
+        # get all clips
+        if self.external_test_location:
+            video_clip, masks_selected, mask_idx_selected = self.generate_all_clips(video)
+
+        # get a random clip, keep 2 masks in each clip
+        else:
+            idx_selected, masks_selected, mask_idx_selected = self.select_random_clip(video_length, masks, mask_idx)
+            print(mask_idx_selected, idx_selected)
+            video_clip = video[:, idx_selected, ...]
+
+            # fuzzy augmentation on mask_idx
+            if self.fuzzy_aug:
+                for i, m_idx in enumerate(mask_idx_selected):
+                    if m_idx > 0 and m_idx < video_clip.shape[1]-1:
+                        mask_idx_selected[i] = m_idx + np.random.choice([-1,0,1], 1)
+
+        return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected}
+
+    def sort_mask(self, masks, mask_idx):
+        idx_sort = np.argsort(mask_idx)
+        masks = masks[idx_sort, ...]
+        mask_idx = mask_idx[idx_sort]
+        return masks, mask_idx
+
+    def select_andom_clip(self, video_length, masks, mask_idx):
+        # randomly select a mask to be included in the clip
+        mask_idx_idx = np.random.choice(len(mask_idx))
+        mask_idx_selected = mask_idx[mask_idx_idx]
+        mask = masks[mask_idx_idx]
+
+        # randomly select a start idx for this clip
+        start_idx_set = np.arange(max(0, mask_idx_selected-self.length+1), min(mask_idx_selected+1, video_length-self.length+1))
+        start_idx = np.random.choice(start_idx_set)
+        idx_list = np.arange(start_idx, start_idx+self.length)
+
+        # ensure 2 masks in the clip
+        masks_clip = []
+        mask_idx_clip = []
+        for i, mask_idx_i in enumerate(mask_idx):
+            if len(masks_clip) == 2:
+                break
+            if mask_idx_i in idx_list:
+                mask_idx_clip.append(mask_idx_i)
+                masks_clip.append(masks[i])
+        # if only one clip, make it twice
+        if len(masks_clip) == 1:
+            masks_clip.append(masks_clip[-1])
+            mask_idx_clip.append(mask_idx_clip[-1])
+        masks_clip = np.stack(masks_clip, 0)
+        mask_idx_clip = np.array(mask_idx_clip) - start_idx
+        return idx_list, masks_clip, mask_idx_clip
+
+    def generate_all_clips(self, video, masks, mask_idx):
+        video_length = video.shape[1]
+        # cut if longer than max_length
+        if video_length > self.max_length:
+            video = video[:,:self.max_length,...]
+            for m in range(len(mask_idx)):
+                if mask_idx[m] >= self.max_length:
+                    mask_idx = np.delete(mask_idx, m)
+                    masks = np.delete(masks, m)
+        video_clips = []
+        start_idx = 0
+        while(True):
+            if start_idx >= video_length:
+                break
+            if start_idx + self.clip_length > video_length:
+                pad = np.zeros((video.shape[0], start_idx+self.clip_length-video_length, video.shape[2], video.shape[3])).astype(np.float32)
+                video = np.concatenate([video, pad], axis=1)
+            video_clip = video[:, start_idx:start_idx+self.clip_length, ...]
+            video_clips.append(video_clip)
+            start_idx += self.clip_length
+        return video_clips, masks, mask_idx
 
 
 def _defaultdict_of_lists():
