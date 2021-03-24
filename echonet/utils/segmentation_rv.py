@@ -142,18 +142,15 @@ def run(num_epochs=50,
                 for i in range(torch.cuda.device_count()):
                     torch.cuda.reset_peak_memory_stats(i)
 
-                loss, large_inter, large_union, small_inter, small_union = echonet.utils.segmentation.run_epoch(model, dataloaders[phase], phase == "train", optim, device)
-                overall_dice = 2 * (large_inter.sum() + small_inter.sum()) / (large_union.sum() + large_inter.sum() + small_union.sum() + small_inter.sum())
-                large_dice = 2 * large_inter.sum() / (large_union.sum() + large_inter.sum())
-                small_dice = 2 * small_inter.sum() / (small_union.sum() + small_inter.sum())
-                f.write("{},{},{},{},{},{},{},{},{},{},{}\n".format(epoch,
+                loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloaders[phase], phase == "train", optim, device)
+                overall_dice = 2 * inter.sum() / (union.sum() + inter.sum())
+                f.write("{},{},{},{},{},{},{},{},{},{}\n".format(epoch,
                                                                     phase,
-                                                                    loss,
+                                                                    loss_seg,
+                                                                    loss_cons,
                                                                     overall_dice,
-                                                                    large_dice,
-                                                                    small_dice,
                                                                     time.time() - start_time,
-                                                                    large_inter.size,
+                                                                    inter.size,
                                                                     sum(torch.cuda.max_memory_allocated() for i in range(torch.cuda.device_count())),
                                                                     sum(torch.cuda.max_memory_cached() for i in range(torch.cuda.device_count())),
                                                                     batch_size))
@@ -165,14 +162,17 @@ def run(num_epochs=50,
                 'epoch': epoch,
                 'state_dict': model.state_dict(),
                 'best_loss': bestLoss,
-                'loss': loss,
+                'loss': loss_seg,
                 'opt_dict': optim.state_dict(),
                 'scheduler_dict': scheduler.state_dict(),
             }
             torch.save(save, os.path.join(output, "checkpoint.pt"))
-            if loss < bestLoss:
+            if loss_seg < bestLoss:
                 torch.save(save, os.path.join(output, "best.pt"))
-                bestLoss = loss
+                bestLoss = loss_seg
+
+            if epoch > 1:
+                break
 
         # Load best weights
         checkpoint = torch.load(os.path.join(output, "best.pt"))
@@ -182,34 +182,28 @@ def run(num_epochs=50,
         if run_test:
             # Run on validation and test
             for split in ["val", "test"]:
-                dataset = echonet.datasets.Echo(split=split, **kwargs)
+                dataset = echonet.datasets.Echo_RV(split=split)
                 dataloader = torch.utils.data.DataLoader(dataset,
                                                          batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
-                loss, large_inter, large_union, small_inter, small_union = echonet.utils.segmentation.run_epoch(model, dataloader, False, None, device)
+                loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloader, False, None, device)
 
-                overall_dice = 2 * (large_inter + small_inter) / (large_union + large_inter + small_union + small_inter)
-                large_dice = 2 * large_inter / (large_union + large_inter)
-                small_dice = 2 * small_inter / (small_union + small_inter)
+                overall_dice = 2 * inter / (union + inter)
                 with open(os.path.join(output, "{}_dice.csv".format(split)), "w") as g:
-                    g.write("Filename, Overall, Large, Small\n")
-                    for (filename, overall, large, small) in zip(dataset.fnames, overall_dice, large_dice, small_dice):
-                        g.write("{},{},{},{}\n".format(filename, overall, large, small))
+                    g.write("Filename, Overall\n")
+                    for (filename, overall) in zip(dataset.subj_list_all[:len(overall_dice)], overall_dice):
+                        g.write("{},{}\n".format(filename, overall))
 
-                f.write("{} dice (overall): {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(np.concatenate((large_inter, small_inter)), np.concatenate((large_union, small_union)), echonet.utils.dice_similarity_coefficient)))
-                f.write("{} dice (large):   {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(large_inter, large_union, echonet.utils.dice_similarity_coefficient)))
-                f.write("{} dice (small):   {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(small_inter, small_union, echonet.utils.dice_similarity_coefficient)))
+                f.write("{} dice (overall): {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(inter, union, echonet.utils.dice_similarity_coefficient)))
                 f.flush()
 
     # Saving videos with segmentations
-    dataset = echonet.datasets.Echo(split="test",
-                                    target_type=["Filename", "LargeIndex", "SmallIndex"],  # Need filename for saving, and human-selected frames to annotate
-                                    mean=mean, std=std,  # Normalization
-                                    length=None, max_length=None, period=1  # Take all frames
-                                    )
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=10, num_workers=num_workers, shuffle=False, pin_memory=False, collate_fn=_video_collate_fn)
+    dataset = echonet.datasets.Echo_RV(split="test")
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, pin_memory=False, collate_fn=_video_collate_fn)
 
     # Save videos with segmentation
-    if save_segmentation and not all(os.path.isfile(os.path.join(output, "videos", f)) for f in dataloader.dataset.fnames):
+    print('End 03/23')
+    pdb.set_trace()
+    if save_segmentation and not all(os.path.isfile(os.path.join(output, "videos", f)) for f in dataloader.dataset.subj_list_all):
         # Only run if missing videos
 
         model.eval()
@@ -328,7 +322,7 @@ def run(num_epochs=50,
 
 
 def run_epoch(model, dataloader, train, optim, device):
-    """Run one epoch of training/evaluation for segmentation.
+    """Run one epoch of training/evaluation for segmentation rv.
 
     Args:
         model (torch.nn.Module): Model to train/evaulate.
@@ -338,91 +332,86 @@ def run_epoch(model, dataloader, train, optim, device):
         device (torch.device): Device to run on
     """
 
-    total = 0.
+    total_seg = 0.
+    total_cons = 0.
     n = 0
 
     pos = 0
     neg = 0
-    pos_pix = 0
-    neg_pix = 0
 
     model.train(train)
 
-    large_inter = 0
-    large_union = 0
-    small_inter = 0
-    small_union = 0
-    large_inter_list = []
-    large_union_list = []
-    small_inter_list = []
-    small_union_list = []
+    inter = 0
+    union = 0
+    inter_list = []
+    union_list = []
 
     with torch.set_grad_enabled(train):
         with tqdm.tqdm(total=len(dataloader)) as pbar:
-            for (_, (large_frame, small_frame, large_trace, small_trace)) in dataloader:
+            for iter, sample in enumerate(dataloader):
+                video = sample['video']
+                mask = sample['mask']
+                mask_idx = sample['mask_idx']
                 # Count number of pixels in/out of human segmentation
-                pos += (large_trace == 1).sum().item()
-                pos += (small_trace == 1).sum().item()
-                neg += (large_trace == 0).sum().item()
-                neg += (small_trace == 0).sum().item()
-
-                # Count number of pixels in/out of computer segmentation
-                pos_pix += (large_trace == 1).sum(0).to("cpu").detach().numpy()
-                pos_pix += (small_trace == 1).sum(0).to("cpu").detach().numpy()
-                neg_pix += (large_trace == 0).sum(0).to("cpu").detach().numpy()
-                neg_pix += (small_trace == 0).sum(0).to("cpu").detach().numpy()
-
+                pos += (mask == 1).sum()
+                neg += (mask == 0).sum()
+                # to gpu
+                video = video.to(device)
+                mask = mask.to(device)
+                mask_idx = mask_idx.to(device)
                 # Run prediction for diastolic frames and compute loss
-                large_frame = large_frame.to(device)
-                large_trace = large_trace.to(device)
-                y_large = model(large_frame)["out"]
-                loss_large = torch.nn.functional.binary_cross_entropy_with_logits(y_large[:, 0, :, :], large_trace, reduction="sum")
-                # Compute pixel intersection and union between human and computer segmentations
-                large_inter += np.logical_and(y_large[:, 0, :, :].detach().cpu().numpy() > 0., large_trace[:, :, :].detach().cpu().numpy() > 0.).sum()
-                large_union += np.logical_or(y_large[:, 0, :, :].detach().cpu().numpy() > 0., large_trace[:, :, :].detach().cpu().numpy() > 0.).sum()
-                large_inter_list.extend(np.logical_and(y_large[:, 0, :, :].detach().cpu().numpy() > 0., large_trace[:, :, :].detach().cpu().numpy() > 0.).sum((1, 2)))
-                large_union_list.extend(np.logical_or(y_large[:, 0, :, :].detach().cpu().numpy() > 0., large_trace[:, :, :].detach().cpu().numpy() > 0.).sum((1, 2)))
+                pred_logit = model(video)
+                pred_logit = pred_logit.squeeze(1)
+                pred_logit_sel = []
+                for bs in range(pred_logit.shape[0]):
+                    pred_logit_sel.append(pred_logit[bs:bs+1, mask_idx[bs], ...])
+                pred_logit_sel = torch.cat(pred_logit_sel, 0)
 
-                # Run prediction for systolic frames and compute loss
-                small_frame = small_frame.to(device)
-                small_trace = small_trace.to(device)
-                y_small = model(small_frame)["out"]
-                loss_small = torch.nn.functional.binary_cross_entropy_with_logits(y_small[:, 0, :, :], small_trace, reduction="sum")
+                loss_seg = torch.nn.functional.binary_cross_entropy_with_logits(pred_logit_sel, mask, reduction="mean")
+                loss_cons = echonet.utils.segmentation_rv.compute_consistency_loss(pred_logit)
+
                 # Compute pixel intersection and union between human and computer segmentations
-                small_inter += np.logical_and(y_small[:, 0, :, :].detach().cpu().numpy() > 0., small_trace[:, :, :].detach().cpu().numpy() > 0.).sum()
-                small_union += np.logical_or(y_small[:, 0, :, :].detach().cpu().numpy() > 0., small_trace[:, :, :].detach().cpu().numpy() > 0.).sum()
-                small_inter_list.extend(np.logical_and(y_small[:, 0, :, :].detach().cpu().numpy() > 0., small_trace[:, :, :].detach().cpu().numpy() > 0.).sum((1, 2)))
-                small_union_list.extend(np.logical_or(y_small[:, 0, :, :].detach().cpu().numpy() > 0., small_trace[:, :, :].detach().cpu().numpy() > 0.).sum((1, 2)))
+                inter += np.logical_and(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum()
+                union += np.logical_or(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum()
+                inter_list.extend(np.logical_and(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum((1, 2, 3)))
+                union_list.extend(np.logical_or(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum((1, 2, 3)))
 
                 # Take gradient step if training
-                loss = (loss_large + loss_small) / 2
+                loss = loss_seg +  loss_cons
                 if train:
                     optim.zero_grad()
                     loss.backward()
                     optim.step()
 
                 # Accumulate losses and compute baselines
-                total += loss.item()
-                n += large_trace.size(0)
+                total_seg += loss_seg.item()
+                total_cons += loss_cons.item()
+                n += video.size(0)
                 p = pos / (pos + neg)
-                p_pix = (pos_pix + 1) / (pos_pix + neg_pix + 2)
 
                 # Show info on process bar
-                pbar.set_postfix_str("{:.4f} ({:.4f}) / {:.4f} {:.4f}, {:.4f}, {:.4f}".format(total / n / 112 / 112, loss.item() / large_trace.size(0) / 112 / 112, -p * math.log(p) - (1 - p) * math.log(1 - p), (-p_pix * np.log(p_pix) - (1 - p_pix) * np.log(1 - p_pix)).mean(), 2 * large_inter / (large_union + large_inter), 2 * small_inter / (small_union + small_inter)))
+                pbar.set_postfix_str("{:.4f} {:.4f} / {:.4f}, {:.4f}".format(total_seg / n, total_cons / n, -p * math.log(p) - (1 - p) * math.log(1 - p), 2 * inter / (union + inter)))
                 pbar.update()
 
-    large_inter_list = np.array(large_inter_list)
-    large_union_list = np.array(large_union_list)
-    small_inter_list = np.array(small_inter_list)
-    small_union_list = np.array(small_union_list)
+                if iter > 10:
+                    break
 
-    return (total / n / 112 / 112,
-            large_inter_list,
-            large_union_list,
-            small_inter_list,
-            small_union_list,
+    inter_list = np.array(inter_list)
+    union_list = np.array(union_list)
+
+    return (total_seg / n,
+            total_cons / n,
+            inter_list,
+            union_list
             )
 
+def compute_consistency_loss(pred_logit):
+    num_pred = pred_logit.shape[1]
+    pred_logit_bi = (pred_logit > 0).float()
+    pred_1 = pred_logit_bi[:,1:num_pred,...]
+    pred_2 = pred_logit_bi[:,0:num_pred-1,...]
+    diff = torch.abs(pred_1 - pred_2)
+    return diff.mean()
 
 def _video_collate_fn(x):
     """Collate function for Pytorch dataloader to merge multiple videos.

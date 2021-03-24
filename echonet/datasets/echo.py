@@ -354,6 +354,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         # load h5 file
         self.data_list = []
         self.subj_list = []
+        self.subj_list_all = []
         self.subj_list_count = []
         self.subj_list_count_acc = [0]
         data_path_list = [self.external_test_location] if self.external_test_location else self.root
@@ -362,6 +363,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             self.subj_list.append(np.load(os.path.join(data_path, 'subj_list.npy'), allow_pickle=True).item()[split])
             self.subj_list_count.append(len(self.subj_list[-1]))
             self.subj_list_count_acc.append(self.subj_list_count_acc[-1]+self.subj_list_count[-1])
+            self.subj_list_all.extend(self.subj_list[-1])
         print('Total number of videos', self.__len__())
 
     def __len__(self):
@@ -455,15 +457,16 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         print('Finished saving preprocessed h5 file', data_path)
 
     def __getitem__(self, idx):
-        pdb.set_trace()
+        #pdb.set_trace()
         data_path_list = [self.external_test_location] if self.external_test_location else self.root
-        for data_path in data_path_list:
+        for dataset_idx, data_path in enumerate(data_path_list):
             if idx < self.subj_list_count_acc[dataset_idx+1]:
                 break
-        subj_id = self.subj_list[idx-self.subj_list_count_acc[dataset_idx]]
-        video = np.array(self.data[dataset_idx][subj_id]['video'])
-        masks = np.array(self.data[dataset_idx][subj_id]['masks'])
-        mask_idx = np.array(self.data[dataset_idx][subj_id]['mask_idx'])
+        subj_id = self.subj_list_all[idx]
+        # subj_id = self.subj_list[dataset_idx][idx-self.subj_list_count_acc[dataset_idx]]
+        video = np.array(self.data_list[dataset_idx][subj_id]['video'])
+        masks = np.array(self.data_list[dataset_idx][subj_id]['masks'])
+        mask_idx = np.array(self.data_list[dataset_idx][subj_id]['mask_idx'])
 
         # select video period
         if self.split == 'train':
@@ -490,7 +493,6 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         # get a random clip, keep 2 masks in each clip
         else:
             idx_selected, masks_selected, mask_idx_selected = self.select_random_clip(video_length, masks, mask_idx)
-            print(mask_idx_selected, idx_selected)
             video_clip = video[:, idx_selected, ...]
 
             # fuzzy augmentation on mask_idx
@@ -507,7 +509,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         mask_idx = mask_idx[idx_sort]
         return masks, mask_idx
 
-    def select_andom_clip(self, video_length, masks, mask_idx):
+    def select_random_clip(self, video_length, masks, mask_idx):
         # randomly select a mask to be included in the clip
         mask_idx_idx = np.random.choice(len(mask_idx))
         mask_idx_selected = mask_idx[mask_idx_idx]
