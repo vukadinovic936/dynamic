@@ -310,16 +310,13 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             Defaults to 1.
         max_length (int or None, optional): Maximum number of frames to clip from video (main use is for shortening excessively
             long videos when ``length'' is set to None). If ``None'', shortening is not applied to any video.
-            Defaults to 250.
-        clips (int, optional): Number of clips to sample. Main use is for test-time augmentation with random clips.
-            Defaults to 1.
-        pad (int or None, optional): Number of pixels to pad all frames on each side (used as augmentation).
-            and a window of the original size is taken. If ``None'', no padding occurs.
-            Defaults to ``None''.
-        noise (float or None, optional): Fraction of pixels to black out as simulated noise. If ``None'', no simulated noise is added.
-            Defaults to ``None''.
-        target_transform (callable, optional): A function/transform that takes in the target and transforms it.
-        external_test_location (string): Path to videos to use for external testing.
+            Defaults to 512.
+        fuzzy_aug (boolean, optional): augmentation by shifting mask indexes
+            Defaults to False.
+        test_mode (False, optional): cut videos into overlapping clips
+            Defaults to False.
+        test_overlap_stride (int, optional): mitigate inconsistent segmentation, stride step for window-sliding of clips
+            Defaults to 8
     """
 
     def __init__(self, root=None,
@@ -328,7 +325,8 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                  length=32, max_length=512,
                  period=1,
                  fuzzy_aug=False,
-                 external_test_location=None):
+                 test_mode=False,
+                 test_overlap_stride=8):
         super().__init__(root)
 
         if root is None:
@@ -342,14 +340,12 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         self.max_length = max_length
         self.period = period
         self.fuzzy_aug = fuzzy_aug
-
-        self.external_test_location = external_test_location
+        self.test_mode = test_mode
+        self.test_overlap_stride = test_overlap_stride
 
         # preprocess dataset, save in h5 of the same folder
         for data_path in self.root:
             self.preprocess_dataset(data_path)
-        if self.external_test_location:
-            self.preprocess_dataset(self.external_test_location, external_test=True)
 
         # load h5 file
         self.data_list = []
@@ -357,8 +353,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         self.subj_list_all = []
         self.subj_list_count = []
         self.subj_list_count_acc = [0]
-        data_path_list = [self.external_test_location] if self.external_test_location else self.root
-        for data_path in data_path_list:
+        for data_path in self.root:
             self.data_list.append(h5py.File(os.path.join(data_path, 'preprocessed.h5'), 'r'))
             self.subj_list.append(np.load(os.path.join(data_path, 'subj_list.npy'), allow_pickle=True).item()[split])
             self.subj_list_count.append(len(self.subj_list[-1]))
@@ -369,7 +364,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
     def __len__(self):
         return np.sum(self.subj_list_count)
 
-    def preprocess_dataset(self, data_path, external_test=False):
+    def preprocess_dataset(self, data_path):
         # check whether have preprocessed h5 file
         h5_path = os.path.join(data_path, 'preprocessed.h5')
         if os.path.exists(h5_path):
@@ -381,7 +376,9 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         if not os.path.exists(video_path):
             raise ValueError('Missing video folder')
         if not os.path.exists(mask_path):
-            raise ValueError('Missing mask folder')
+            print('Missing mask folder')
+            os.mkdir(mask_path)
+
         # prepare h5 file in dict
         data_dict = {}    # subj_id: split, mask index, mask names, video name
         # with FileList.csv of name and split
@@ -408,7 +405,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             for i, subj_video_path in enumerate(subj_video_paths):
                 #pdb.set_trace()
                 subj_id = os.path.basename(subj_video_path).split('.')[0]
-                if external_test:
+                if self.test_mode:
                     split = 'test'
                 else:
                     if np.random.rand() < 0.2:
@@ -439,8 +436,13 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                 if len(mask.shape) == 3:
                     mask = mask[np.newaxis,:,:,0]
                 masks.append(mask)
-            masks = np.concatenate(masks, 0)
-            masks = masks / 255.0
+            if len(masks) == 0:
+                masks = np.zeros((0,112,112))
+                is_mask = False
+            else:
+                masks = np.concatenate(masks, 0)
+                masks = masks / 255.0
+                is_mask = True
 
             video = echonet.utils.loadvideo(data_dict[subj_id]['video_path']).astype(np.float32)
             video_norm = (video - mean.reshape(3,1,1,1)) / std.reshape(3,1,1,1)
@@ -452,14 +454,13 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             h5_file.create_dataset(subj_id+'/masks', data=masks)
             h5_file.create_dataset(subj_id+'/video', data=video_norm)
             h5_file.create_dataset(subj_id+'/mask_idx', data=data_dict[subj_id]['mask_idx'])
+            h5_file.create_dataset(subj_id+'/is_mask', data=is_mask)
 
             np.save(os.path.join(data_path, 'subj_list.npy'), subj_list)
         print('Finished saving preprocessed h5 file', data_path)
 
     def __getitem__(self, idx):
-        #pdb.set_trace()
-        data_path_list = [self.external_test_location] if self.external_test_location else self.root
-        for dataset_idx, data_path in enumerate(data_path_list):
+        for dataset_idx, data_path in enumerate(self.root):
             if idx < self.subj_list_count_acc[dataset_idx+1]:
                 break
         subj_id = self.subj_list_all[idx]
@@ -467,31 +468,43 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         video = np.array(self.data_list[dataset_idx][subj_id]['video'])
         masks = np.array(self.data_list[dataset_idx][subj_id]['masks'])
         mask_idx = np.array(self.data_list[dataset_idx][subj_id]['mask_idx'])
+        try:
+            is_mask = np.array(self.data_list[dataset_idx][subj_id]['is_mask'])
+        except:
+            is_mask = (masks.shape[0] > 0)
 
-        # select video period
-        if self.split == 'train':
-            start = np.random.choice(self.period)
+        if self.test_mode:
+            video_length = video.shape[1]
+            if video_length < self.length:
+                pad = np.tile(video[:,-1:,...], (1,self.length-video_length,1,1))
+                video = np.concatenate([video, pad], axis=1)
+                video_length = self.length
+            # get all clips
+            video_clip, masks_selected, mask_idx_selected, idx_list = self.generate_all_clips(video, masks, mask_idx)
+            video_clip = np.stack(video_clip, 0)
+            idx_list = np.stack(idx_list, 0) 
+            return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected,
+                    'idx_list': idx_list, 'video_length':video.shape[1], 'is_mask':is_mask, 'subj_id':subj_id}
         else:
-            start = 0
-        video = video[:,start::self.period]
-        mask_idx = (mask_idx / self.period).astype(int)
-        video_length = video.shape[1]
-        mask_idx = np.where(mask_idx>=video_length, video_length-1, mask_idx)
+            # select video period
+            if self.split == 'train':
+                start = np.random.choice(self.period)
+            else:
+                start = 0
+            video = video[:,start::self.period]
+            mask_idx = (mask_idx / self.period).astype(int)
+            video_length = video.shape[1]
+            mask_idx = np.where(mask_idx>=video_length, video_length-1, mask_idx)
 
-        if video_length < self.length:
-            pad = np.tile(video[:,-1:,...], (1,self.length-video_length,1,1))
-            video = np.concatenate([video, pad], axis=1)
-            video_length = self.length
+            if video_length < self.length:
+                pad = np.tile(video[:,-1:,...], (1,self.length-video_length,1,1))
+                video = np.concatenate([video, pad], axis=1)
+                video_length = self.length
 
-        # sort masks
-        masks, mask_idx = self.sort_mask(masks, mask_idx)
+            # sort masks
+            masks, mask_idx = self.sort_mask(masks, mask_idx)
 
-        # get all clips
-        if self.external_test_location:
-            video_clip, masks_selected, mask_idx_selected = self.generate_all_clips(video)
-
-        # get a random clip, keep 2 masks in each clip
-        else:
+            # get a random clip, keep 2 masks in each clip
             idx_selected, masks_selected, mask_idx_selected = self.select_random_clip(video_length, masks, mask_idx)
             video_clip = video[:, idx_selected, ...]
 
@@ -501,7 +514,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                     if m_idx > 0 and m_idx < video_clip.shape[1]-1:
                         mask_idx_selected[i] = m_idx + np.random.choice([-1,0,1], 1)
 
-        return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected}
+            return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected}
 
     def sort_mask(self, masks, mask_idx):
         idx_sort = np.argsort(mask_idx)
@@ -548,16 +561,18 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                     masks = np.delete(masks, m)
         video_clips = []
         start_idx = 0
+        idx_list = []
         while(True):
             if start_idx >= video_length:
                 break
-            if start_idx + self.clip_length > video_length:
-                pad = np.zeros((video.shape[0], start_idx+self.clip_length-video_length, video.shape[2], video.shape[3])).astype(np.float32)
+            if start_idx + self.length > video_length:
+                pad = np.zeros((video.shape[0], start_idx+self.length-video_length, video.shape[2], video.shape[3])).astype(np.float32)
                 video = np.concatenate([video, pad], axis=1)
-            video_clip = video[:, start_idx:start_idx+self.clip_length, ...]
+            video_clip = video[:, start_idx:start_idx+self.length, ...]
             video_clips.append(video_clip)
-            start_idx += self.clip_length
-        return video_clips, masks, mask_idx
+            idx_list.append([np.linspace(start_idx, start_idx+self.length-1, self.length).astype(int)])
+            start_idx += self.test_overlap_stride
+        return video_clips, masks, mask_idx, idx_list
 
 
 def _defaultdict_of_lists():

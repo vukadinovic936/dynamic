@@ -30,7 +30,8 @@ def run(num_epochs=50,
         lr_step_period=None,
         save_segmentation=False,
         block_size=1024,
-        run_test=False):
+        run_test=False,
+        test_only=False):
     """Trains/tests segmentation model.
 
     Args:
@@ -69,6 +70,8 @@ def run(num_epochs=50,
             Defaults to 1024.
         run_test (bool, optional): Whether or not to run on test.
             Defaults to False.
+        test_only (bool, optional):Skip training and direct do the testing.
+            Defaults to False.
     """
     # Seed RNGs
     np.random.seed(seed)
@@ -98,111 +101,107 @@ def run(num_epochs=50,
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
 
-    # Compute mean and std
-    # mean, std = echonet.utils.get_mean_and_std(echonet.datasets.Echo(split="train"))
-    # tasks = ["LargeFrame", "SmallFrame", "LargeTrace", "SmallTrace"]
-    # kwargs = {"target_type": tasks,
-    #           "mean": mean,
-    #           "std": std
-    #           }
-
-    # Set up datasets and dataloaders
-    #train_dataset = nc.SafeDataset(echonet.datasets.Echo_RV(split="train", fuzzy_aug=True))
-    #val_dataset = nc.SafeDataset(echonet.datasets.Echo_RV(split="val"))
-    train_dataset = echonet.datasets.Echo_RV(split="train", fuzzy_aug=True)
-    val_dataset = echonet.datasets.Echo_RV(split="val")
-
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"), drop_last=True)
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
-    dataloaders = {'train': train_dataloader, 'val': val_dataloader}
-
-    # Run training and testing loops
-    with open(os.path.join(output, "log.csv"), "a") as f:
-        epoch_resume = 0
-        bestLoss = float("inf")
+    if test_only:
         try:
-            # Attempt to load checkpoint
             checkpoint = torch.load(os.path.join(output, "checkpoint.pt"))
             model.load_state_dict(checkpoint['state_dict'])
             optim.load_state_dict(checkpoint['opt_dict'])
             scheduler.load_state_dict(checkpoint['scheduler_dict'])
-            epoch_resume = checkpoint["epoch"] + 1
-            bestLoss = checkpoint["best_loss"]
-            f.write("Resuming from epoch {}\n".format(epoch_resume))
-        except FileNotFoundError:
-            f.write("Starting run from scratch\n")
+        except:
+            raise ValueError('Cannot load model')
+    else:
+        train_dataset = echonet.datasets.Echo_RV(split="train", fuzzy_aug=True)
+        val_dataset = echonet.datasets.Echo_RV(split="val")
 
-        pdb.set_trace()
-        for epoch in range(epoch_resume, num_epochs):
-            print("Epoch #{}".format(epoch), flush=True)
-            for phase in ['train', 'val']:
-                start_time = time.time()
-                for i in range(torch.cuda.device_count()):
-                    torch.cuda.reset_peak_memory_stats(i)
+        train_dataloader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"), drop_last=True)
+        val_dataloader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
+        dataloaders = {'train': train_dataloader, 'val': val_dataloader}
 
-                loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloaders[phase], phase == "train", optim, device)
-                overall_dice = 2 * inter.sum() / (union.sum() + inter.sum())
-                f.write("{},{},{},{},{},{},{},{},{},{}\n".format(epoch,
-                                                                    phase,
-                                                                    loss_seg,
-                                                                    loss_cons,
-                                                                    overall_dice,
-                                                                    time.time() - start_time,
-                                                                    inter.size,
-                                                                    sum(torch.cuda.max_memory_allocated() for i in range(torch.cuda.device_count())),
-                                                                    sum(torch.cuda.max_memory_cached() for i in range(torch.cuda.device_count())),
-                                                                    batch_size))
-                f.flush()
-            scheduler.step()
+        with open(os.path.join(output, "log.csv"), "a") as f:
+            epoch_resume = 0
+            bestLoss = float("inf")
+            # Run training and testing loops
+            try:
+                # Attempt to load checkpoint
+                checkpoint = torch.load(os.path.join(output, "checkpoint.pt"))
+                model.load_state_dict(checkpoint['state_dict'])
+                optim.load_state_dict(checkpoint['opt_dict'])
+                scheduler.load_state_dict(checkpoint['scheduler_dict'])
+                epoch_resume = checkpoint["epoch"] + 1
+                bestLoss = checkpoint["best_loss"]
+                f.write("Resuming from epoch {}\n".format(epoch_resume))
+            except FileNotFoundError:
+                f.write("Starting run from scratch\n")
 
-            # Save checkpoint
-            save = {
-                'epoch': epoch,
-                'state_dict': model.state_dict(),
-                'best_loss': bestLoss,
-                'loss': loss_seg,
-                'opt_dict': optim.state_dict(),
-                'scheduler_dict': scheduler.state_dict(),
-            }
-            torch.save(save, os.path.join(output, "checkpoint.pt"))
-            if loss_seg < bestLoss:
-                torch.save(save, os.path.join(output, "best.pt"))
-                bestLoss = loss_seg
+            pdb.set_trace()
+            for epoch in range(epoch_resume, num_epochs):
+                print("Epoch #{}".format(epoch), flush=True)
+                for phase in ['train', 'val']:
+                    start_time = time.time()
+                    for i in range(torch.cuda.device_count()):
+                        torch.cuda.reset_peak_memory_stats(i)
 
-            if epoch > 1:
-                break
+                    loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloaders[phase], phase == "train", optim, device)
+                    overall_dice = 2 * inter.sum() / (union.sum() + inter.sum())
+                    f.write("{},{},{},{},{},{},{},{},{},{}\n".format(epoch,
+                                                                        phase,
+                                                                        loss_seg,
+                                                                        loss_cons,
+                                                                        overall_dice,
+                                                                        time.time() - start_time,
+                                                                        inter.size,
+                                                                        sum(torch.cuda.max_memory_allocated() for i in range(torch.cuda.device_count())),
+                                                                        sum(torch.cuda.max_memory_cached() for i in range(torch.cuda.device_count())),
+                                                                        batch_size))
+                    f.flush()
+                scheduler.step()
 
-        # Load best weights
-        checkpoint = torch.load(os.path.join(output, "best.pt"))
-        model.load_state_dict(checkpoint['state_dict'])
-        f.write("Best validation loss {} from epoch {}\n".format(checkpoint["loss"], checkpoint["epoch"]))
+                # Save checkpoint
+                save = {
+                    'epoch': epoch,
+                    'state_dict': model.state_dict(),
+                    'best_loss': bestLoss,
+                    'loss': loss_seg,
+                    'opt_dict': optim.state_dict(),
+                    'scheduler_dict': scheduler.state_dict(),
+                }
+                torch.save(save, os.path.join(output, "checkpoint.pt"))
+                if loss_seg < bestLoss:
+                    torch.save(save, os.path.join(output, "best.pt"))
+                    bestLoss = loss_seg
 
-        if run_test:
-            # Run on validation and test
-            for split in ["val", "test"]:
-                dataset = echonet.datasets.Echo_RV(split=split)
-                dataloader = torch.utils.data.DataLoader(dataset,
-                                                         batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
-                loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloader, False, None, device)
+                if epoch > 1:
+                    break
 
-                overall_dice = 2 * inter / (union + inter)
-                with open(os.path.join(output, "{}_dice.csv".format(split)), "w") as g:
-                    g.write("Filename, Overall\n")
-                    for (filename, overall) in zip(dataset.subj_list_all[:len(overall_dice)], overall_dice):
-                        g.write("{},{}\n".format(filename, overall))
+            # Load best weights
+            checkpoint = torch.load(os.path.join(output, "best.pt"))
+            model.load_state_dict(checkpoint['state_dict'])
+            f.write("Best validation loss {} from epoch {}\n".format(checkpoint["loss"], checkpoint["epoch"]))
 
-                f.write("{} dice (overall): {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(inter, union, echonet.utils.dice_similarity_coefficient)))
-                f.flush()
+            if run_test:
+                # Run on validation and test
+                for split in ["val", "test"]:
+                    dataset = echonet.datasets.Echo_RV(split=split)
+                    dataloader = torch.utils.data.DataLoader(dataset,
+                                                             batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=(device.type == "cuda"))
+                    loss_seg, loss_cons, inter, union = echonet.utils.segmentation_rv.run_epoch(model, dataloader, False, None, device)
+
+                    overall_dice = 2 * inter / (union + inter)
+                    with open(os.path.join(output, "{}_dice.csv".format(split)), "w") as g:
+                        g.write("Filename, Overall\n")
+                        for (filename, overall) in zip(dataset.subj_list_all[:len(overall_dice)], overall_dice):
+                            g.write("{},{}\n".format(filename, overall))
+
+                    f.write("{} dice (overall): {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(inter, union, echonet.utils.dice_similarity_coefficient)))
+                    f.flush()
 
     # Saving videos with segmentations
-    dataset = echonet.datasets.Echo_RV(split="test")
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, pin_memory=False, collate_fn=_video_collate_fn)
+    dataset = echonet.datasets.Echo_RV(split="test", test_mode=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, pin_memory=False)
 
     # Save videos with segmentation
-    print('End 03/23')
-    pdb.set_trace()
     if save_segmentation and not all(os.path.isfile(os.path.join(output, "videos", f)) for f in dataloader.dataset.subj_list_all):
         # Only run if missing videos
 
@@ -215,111 +214,170 @@ def run(num_epochs=50,
         with torch.no_grad():
             with open(os.path.join(output, "size.csv"), "w") as g:
                 g.write("Filename,Frame,Size,HumanLarge,HumanSmall,ComputerSmall\n")
-                for (x, (filenames, large_index, small_index), length) in tqdm.tqdm(dataloader):
-                    # Run segmentation model on blocks of frames one-by-one
-                    # The whole concatenated video may be too long to run together
-                    y = np.concatenate([model(x[i:(i + block_size), :, :, :].to(device))["out"].detach().cpu().numpy() for i in range(0, x.shape[0], block_size)])
 
-                    start = 0
-                    x = x.numpy()
-                    for (i, (filename, offset)) in enumerate(zip(filenames, length)):
-                        # Extract one video and segmentation predictions
-                        video = x[start:(start + offset), ...]
-                        logit = y[start:(start + offset), 0, :, :]
+                inter, union = 0, 0
+                for iter, sample in enumerate(dataloader):
+                    video = sample['video'].to(device)
+                    mask = sample['mask'].to(device)
+                    mask_idx = sample['mask_idx'].to(device)
+                    is_mask = sample['is_mask'].to(device)
+                    video_length = sample['video_length'].to(device)
+                    idx_list = sample['idx_list'].to(device)
+                    subj_id = sample['subj_id'][0]
 
-                        # Un-normalize video
-                        video *= std.reshape(1, 3, 1, 1)
-                        video += mean.reshape(1, 3, 1, 1)
+                    # run at most num_bs clips per batch
+                    video = video.squeeze(0)
+                    mask_idx = mask_idx.squeeze(0)
+                    mask = mask.squeeze(0)
+                    pred_logit = []
+                    num_bs = 8
+                    for ii in range(0, video.shape[0], num_bs):
+                        model_output = model(video[ii:min(ii+num_bs,video.shape[0])])
+                        pred_logit.append(model_output)
+                    pred_logit = torch.cat(pred_logit, dim=0)
 
-                        # Get frames, channels, height, and width
-                        f, c, h, w = video.shape  # pylint: disable=W0612
-                        assert c == 3
+                    # organize prediction
+                    video = torch.transpose(video, 0, 1)
+                    # TODO
+                    cut = video.shape[2] // 4   # defalut=8
+                    video_cut = video[:,:,cut:-cut,...]
+                    video_cut = video_cut.reshape(video_cut.shape[0], -1, video_cut.shape[3], video_cut.shape[4])
+                    video = torch.cat([video[:,0,:cut, ...], video_cut, video[:,-1,-cut:,...]], dim=1)
 
-                        # Put two copies of the video side by side
-                        video = np.concatenate((video, video), 3)
+                    pred_logit = pred_logit.squeeze(1)
+                    pred_logit_cut = pred_logit[:,cut:-cut,...]
+                    pred_logit_cut = pred_logit_cut.reshape(-1, pred_logit_cut.shape[2], pred_logit_cut.shape[3])
+                    pred_logit = torch.cat([pred_logit[0,:cut, ...], pred_logit_cut, pred_logit[-1,-cut:,...]], dim=0)
 
-                        # If a pixel is in the segmentation, saturate blue channel
-                        # Leave alone otherwise
-                        video[:, 0, :, w:] = np.maximum(255. * (logit > 0), video[:, 0, :, w:])  # pylint: disable=E1111
+                    idx_list = idx_list.squeeze(0).squeeze(1)
+                    idx_list_cut = idx_list[:,cut:-cut].reshape(-1)
+                    idx_list = torch.cat([idx_list[0,:cut], idx_list_cut, idx_list[-1,-cut:]], dim=0)
 
-                        # Add blank canvas under pair of videos
-                        video = np.concatenate((video, np.zeros_like(video)), 2)
+                    pred_logit_all = []
+                    video_all = []
+                    for ii in range(video_length[0]):
+                        pred_logit_idx = pred_logit[torch.nonzero(idx_list==ii).squeeze(1)]
+                        pred_logit_all.append(pred_logit_idx.mean(0, keepdim=True))
+                        video_idx = video[:,torch.nonzero(idx_list==ii).squeeze(1)[0:1]]
+                        video_all.append(video_idx)
+                    pred_logit_all = torch.cat(pred_logit_all, dim=0)
+                    video_all = torch.cat(video_all, dim=1)
 
-                        # Compute size of segmentation per frame
-                        size = (logit > 0).sum((1, 2))
+                    if is_mask:
+                        pred_logit_sel = pred_logit_all[mask_idx]
+                        inter += np.logical_and(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum()
+                        union += np.logical_or(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum()
 
-                        # Identify systole frames with peak detection
-                        trim_min = sorted(size)[round(len(size) ** 0.05)]
-                        trim_max = sorted(size)[round(len(size) ** 0.95)]
-                        trim_range = trim_max - trim_min
-                        systole = set(scipy.signal.find_peaks(-size, distance=20, prominence=(0.50 * trim_range))[0])
+                    video = video_all.detach().cpu().numpy()
+                    pred_logit = pred_logit_all.detach().cpu().numpy()
+                    mask = mask.detach().cpu().numpy()
+                    mask_idx = mask_idx.detach().cpu().numpy()
 
-                        # Write sizes and frames to file
-                        for (frame, s) in enumerate(size):
-                            g.write("{},{},{},{},{},{}\n".format(filename, frame, s, 1 if frame == large_index[i] else 0, 1 if frame == small_index[i] else 0, 1 if frame in systole else 0))
+                    video_length = video_length.detach().cpu().numpy()[0]
+                    video = video[:, :video_length, ...]
+                    pred_logit = pred_logit[:video_length, ...]
 
-                        # Plot sizes
-                        fig = plt.figure(figsize=(size.shape[0] / 50 * 1.5, 3))
-                        plt.scatter(np.arange(size.shape[0]) / 50, size, s=1)
-                        ylim = plt.ylim()
-                        for s in systole:
-                            plt.plot(np.array([s, s]) / 50, ylim, linewidth=1)
-                        plt.ylim(ylim)
-                        plt.title(os.path.splitext(filename)[0])
-                        plt.xlabel("Seconds")
-                        plt.ylabel("Size (pixels)")
-                        plt.tight_layout()
-                        plt.savefig(os.path.join(output, "size", os.path.splitext(filename)[0] + ".pdf"))
-                        plt.close(fig)
+                    # save video
+                    mean = np.array([28.951515,28.914696,28.896002], dtype = np.float32)
+                    std = np.array([47.857174,47.831146,47.798138], dtype = np.float32)
 
-                        # Normalize size to [0, 1]
-                        size -= size.min()
-                        size = size / size.max()
-                        size = 1 - size
+                    video = video * std.reshape(3,1,1,1) + mean.reshape(3,1,1,1)# (3, video_length, height, width)
+                    video = np.transpose(video, [1,0,2,3])# (video_length, 3, height, width)
 
-                        # Iterate the frames in this video
-                        for (f, s) in enumerate(size):
+                    # Put two copies of the video side by side
+                    video = np.concatenate((video, video), 3)
 
-                            # On all frames, mark a pixel for the size of the frame
-                            video[:, :, int(round(115 + 100 * s)), int(round(f / len(size) * 200 + 10))] = 255.
+                    # If a pixel is in the segmentation, saturate blue channel
+                    # Leave alone otherwise
+                    video[:, 0, :, pred_logit.shape[-1]:] = np.maximum(255. * (pred_logit > 0), video[:, 0, :, pred_logit.shape[-1]:])  # pylint: disable=E1111
 
-                            if f in systole:
-                                # If frame is computer-selected systole, mark with a line
-                                video[:, :, 115:224, int(round(f / len(size) * 200 + 10))] = 255.
+                    # Add blank canvas under pair of videos
+                    video = np.concatenate((video, np.zeros_like(video)), 2)
 
-                            def dash(start, stop, on=10, off=10):
-                                buf = []
-                                x = start
-                                while x < stop:
-                                    buf.extend(range(x, x + on))
-                                    x += on
-                                    x += off
-                                buf = np.array(buf)
-                                buf = buf[buf < stop]
-                                return buf
-                            d = dash(115, 224)
+                    # Compute size of segmentation per frame
+                    size = (pred_logit > 0).sum((1, 2))
 
-                            if f == large_index[i]:
-                                # If frame is human-selected diastole, mark with green dashed line on all frames
-                                video[:, :, d, int(round(f / len(size) * 200 + 10))] = np.array([0, 225, 0]).reshape((1, 3, 1))
-                            if f == small_index[i]:
-                                # If frame is human-selected systole, mark with red dashed line on all frames
-                                video[:, :, d, int(round(f / len(size) * 200 + 10))] = np.array([0, 0, 225]).reshape((1, 3, 1))
+                    # Identify systole frames with peak detection
+                    trim_min = sorted(size)[round(len(size) ** 0.05)]
+                    trim_max = sorted(size)[round(len(size) ** 0.95)]
+                    trim_range = trim_max - trim_min
+                    systole = set(scipy.signal.find_peaks(-size, distance=20, prominence=(0.50 * trim_range))[0])
 
-                            # Get pixels for a circle centered on the pixel
-                            r, c = skimage.draw.circle(int(round(115 + 100 * s)), int(round(f / len(size) * 200 + 10)), 4.1)
+                    # find annotation large and small frame
+                    if is_mask:
+                        mask_area = [mask[i].sum() for i in range(mask.shape[0])]
+                        mask_area_mean = np.mean(mask_area)
+                        large_index = [mask_idx_i for mi, mask_idx_i in enumerate(mask_idx) if mask_area[mi]>mask_area_mean]
+                        small_index = [mask_idx_i for mi, mask_idx_i in enumerate(mask_idx) if mask_area[mi]<=mask_area_mean]
+                    else:
+                        large_index, small_index = [], []
 
-                            # On the frame that's being shown, put a circle over the pixel
-                            video[f, :, r, c] = 255.
+                    # Write sizes and frames to file
+                    filename = subj_id
+                    for (frame, s) in enumerate(size):
+                        g.write("{},{},{},{},{},{}\n".format(filename, frame, s, 1 if frame in large_index else 0, 1 if frame in small_index else 0, 1 if frame in systole else 0))
 
-                        # Rearrange dimensions and save
-                        video = video.transpose(1, 0, 2, 3)
-                        video = video.astype(np.uint8)
-                        echonet.utils.savevideo(os.path.join(output, "videos", filename), video, 50)
+                    # Plot sizes
+                    fig = plt.figure(figsize=(size.shape[0] / 50 * 1.5, 3))
+                    plt.scatter(np.arange(size.shape[0]) / 50, size, s=1)
+                    ylim = plt.ylim()
+                    for s in systole:
+                        plt.plot(np.array([s, s]) / 50, ylim, linewidth=1)
+                    plt.ylim(ylim)
+                    plt.title(os.path.splitext(filename)[0])
+                    plt.xlabel("Seconds")
+                    plt.ylabel("Size (pixels)")
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(output, "size", os.path.splitext(filename)[0] + ".pdf"))
+                    plt.close(fig)
 
-                        # Move to next video
-                        start += offset
+                    # Normalize size to [0, 1]
+                    size -= size.min()
+                    size = size / size.max()
+                    size = 1 - size
 
+                    # Iterate the frames in this video
+                    pdb.set_trace()
+                    for (f, s) in enumerate(size):
+
+                        # On all frames, mark a pixel for the size of the frame
+                        video[:, :, int(round(115/2 + 50 * s)), int(round(f / len(size) * 100 + 5))] = 255.
+
+                        if f in systole:
+                            # If frame is computer-selected systole, mark with a line
+                            video[:, :, 58:112, int(round(f / len(size) * 100 + 5))] = 255.
+
+                        def dash(start, stop, on=10, off=10):
+                            buf = []
+                            x = start
+                            while x < stop:
+                                buf.extend(range(x, x + on))
+                                x += on
+                                x += off
+                            buf = np.array(buf)
+                            buf = buf[buf < stop]
+                            return buf
+                        d = dash(58, 112, on=5, off=5)
+
+                        if f in large_index:
+                            # If frame is human-selected diastole, mark with green dashed line on all frames
+                            video[:, :, d, int(round(f / len(size) * 100 + 5))] = np.array([0, 225, 0]).reshape((1, 3, 1))
+                        if f in small_index:
+                            # If frame is human-selected systole, mark with red dashed line on all frames
+                            video[:, :, d, int(round(f / len(size) * 100 + 5))] = np.array([0, 0, 225]).reshape((1, 3, 1))
+
+                        # Get pixels for a circle centered on the pixel
+                        r, c = skimage.draw.circle(int(round(115/2 + 50 * s)), int(round(f / len(size) * 100 + 5)), 2)
+
+                        # On the frame that's being shown, put a circle over the pixel
+                        video[f, :, r, c] = 255.
+                        print(f, round(f / len(size) * 100 + 5))
+
+                    # Rearrange dimensions and save
+                    video = video.transpose(1, 0, 2, 3)
+                    video = video.astype(np.uint8)
+                    echonet.utils.savevideo(os.path.join(output, "videos", filename), video, 50)
+                print('Overall Dice: ', 2 * inter/(union+inter))
 
 def run_epoch(model, dataloader, train, optim, device):
     """Run one epoch of training/evaluation for segmentation rv.
