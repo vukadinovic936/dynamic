@@ -69,7 +69,7 @@ def savevideo(filename: str, array: np.ndarray, fps: typing.Union[float, int] = 
     if c != 3:
         raise ValueError("savevideo expects array of shape (channels=3, frames, height, width), got shape ({})".format(", ".join(map(str, array.shape))))
     fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
-    out = cv2.VideoWriter(filename, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(filename+'.avi', fourcc, fps, (width, height))
 
     for i in range(f):
         out.write(array[:, i, :, :].transpose((1, 2, 0)))

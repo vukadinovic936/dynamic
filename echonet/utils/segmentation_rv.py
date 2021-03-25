@@ -135,7 +135,6 @@ def run(num_epochs=50,
             except FileNotFoundError:
                 f.write("Starting run from scratch\n")
 
-            pdb.set_trace()
             for epoch in range(epoch_resume, num_epochs):
                 print("Epoch #{}".format(epoch), flush=True)
                 for phase in ['train', 'val']:
@@ -171,9 +170,6 @@ def run(num_epochs=50,
                 if loss_seg < bestLoss:
                     torch.save(save, os.path.join(output, "best.pt"))
                     bestLoss = loss_seg
-
-                if epoch > 1:
-                    break
 
             # Load best weights
             checkpoint = torch.load(os.path.join(output, "best.pt"))
@@ -337,7 +333,6 @@ def run(num_epochs=50,
                     size = 1 - size
 
                     # Iterate the frames in this video
-                    pdb.set_trace()
                     for (f, s) in enumerate(size):
 
                         # On all frames, mark a pixel for the size of the frame
@@ -435,7 +430,7 @@ def run_epoch(model, dataloader, train, optim, device):
                 union_list.extend(np.logical_or(mask.detach().cpu().numpy() > 0., pred_logit_sel.detach().cpu().numpy() > 0.).sum((1, 2, 3)))
 
                 # Take gradient step if training
-                loss = loss_seg +  loss_cons
+                loss = loss_seg + 5*loss_cons
                 if train:
                     optim.zero_grad()
                     loss.backward()
@@ -450,9 +445,6 @@ def run_epoch(model, dataloader, train, optim, device):
                 # Show info on process bar
                 pbar.set_postfix_str("{:.4f} {:.4f} / {:.4f}, {:.4f}".format(total_seg / n, total_cons / n, -p * math.log(p) - (1 - p) * math.log(1 - p), 2 * inter / (union + inter)))
                 pbar.update()
-
-                if iter > 10:
-                    break
 
     inter_list = np.array(inter_list)
     union_list = np.array(union_list)
