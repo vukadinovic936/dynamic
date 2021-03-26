@@ -383,12 +383,14 @@ class Echo_RV(torchvision.datasets.VisionDataset):
 
         # prepare h5 file in dict
         data_dict = {}    # subj_id: split, mask index, mask names, video name
+        subj_list = collections.defaultdict(list)
         # with FileList.csv of name and split
         if os.path.exists(file_path):
             file = pd.read_csv(file_path)
             for i in tqdm.tqdm(range(len(file))):
                 subj_id = file.loc[i, 'FileName']
                 split = file.loc[i, 'Split'].lower()
+                subj_list[split].append(subj_id)
                 subj_mask_paths = glob.glob(os.path.join(mask_path, subj_id + '*.png'))
                 subj_video_path = os.path.join(video_path, subj_id + '.avi')
                 if os.path.exists(subj_video_path) and len(subj_mask_paths) > 0:  # exist video and mask
@@ -414,6 +416,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                         split = 'val'
                     else:
                         split = 'train'
+                subj_list[split].append(subj_id)
                 subj_mask_paths = glob.glob(os.path.join(mask_path, subj_id + '*.png'))
                 mask_idxes = []
                 if len(subj_mask_paths) > 0:
@@ -422,7 +425,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                         mask_idx = int(os.path.basename(subj_mask_path).strip('.png').split('_')[1])
                         mask_idxes.append(mask_idx)
                 data_dict[subj_id] = {'split': split, 'mask_paths': subj_mask_paths, 'video_path': subj_video_path, 'mask_idx': mask_idxes}
-                
+
         print('Finished preparing', data_path)
         print('Number of videos', len(data_dict))
 
