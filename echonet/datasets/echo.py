@@ -11,6 +11,7 @@ import torchvision
 import echonet
 import h5py
 import glob
+import tqdm
 
 import pdb
 
