@@ -10,6 +10,7 @@ import skimage.draw
 import torchvision
 import echonet
 import h5py
+import glob
 
 import pdb
 
@@ -482,7 +483,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             # get all clips
             video_clip, masks_selected, mask_idx_selected, idx_list = self.generate_all_clips(video, masks, mask_idx)
             video_clip = np.stack(video_clip, 0)
-            idx_list = np.stack(idx_list, 0) 
+            idx_list = np.stack(idx_list, 0)
             return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected,
                     'idx_list': idx_list, 'video_length':video.shape[1], 'is_mask':is_mask, 'subj_id':subj_id}
         else:
