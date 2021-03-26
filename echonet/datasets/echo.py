@@ -565,6 +565,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                 if mask_idx[m] >= self.max_length:
                     mask_idx = np.delete(mask_idx, m)
                     masks = np.delete(masks, m)
+        video_length = video.shape[1]
         video_clips = []
         start_idx = 0
         idx_list = []
