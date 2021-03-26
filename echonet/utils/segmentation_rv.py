@@ -96,14 +96,15 @@ def run(num_epochs=50,
     model.to(device)
 
     # Set up optimizer
-    optim = torch.optim.SGD(model.parameters(), lr=1e-5, momentum=0.9)
+    optim = torch.optim.Adam(model.parameters(), lr=1e-3, amsgrad=True)
+    # optim = torch.optim.SGD(model.parameters(), lr=1e-5, momentum=0.9)
     if lr_step_period is None:
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
 
     if test_only:
         try:
-            checkpoint = torch.load(os.path.join(output, "checkpoint.pt"))
+            checkpoint = torch.load(os.path.join(output, "best.pt"))
             model.load_state_dict(checkpoint['state_dict'])
             optim.load_state_dict(checkpoint['opt_dict'])
             scheduler.load_state_dict(checkpoint['scheduler_dict'])
