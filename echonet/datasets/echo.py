@@ -465,6 +465,15 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             np.save(os.path.join(data_path, 'subj_list.npy'), subj_list)
         print('Finished saving preprocessed h5 file', data_path)
 
+    def remove_invalid_mask(self, masks, mask_idx, video_length):
+        idx_keep = []
+        for idx in range(len(mask_idx)):
+            if mask_idx[idx] < video_length:
+                idx_keep.append(idx)
+        mask_idx_new = mask_idx[idx_keep]
+        masks_new = masks[idx_keep]
+        return masks_new, mask_idx_new
+
     def __getitem__(self, idx):
         for dataset_idx, data_path in enumerate(self.root):
             if idx < self.subj_list_count_acc[dataset_idx+1]:
@@ -478,6 +487,8 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             is_mask = np.array(self.data_list[dataset_idx][subj_id]['is_mask'])
         except:
             is_mask = (masks.shape[0] > 0)
+        # remove error masks
+        masks, mask_idx = self.remove_invalid_mask(masks, mask_idx, video.shape[1])
 
         if self.test_mode:
             video_length = video.shape[1]
