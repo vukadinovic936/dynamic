@@ -214,6 +214,7 @@ def run(num_epochs=50,
 
                 inter, union = 0, 0
                 for iter, sample in enumerate(dataloader):
+                    print(iter)
                     video = sample['video'].to(device)
                     mask = sample['mask'].to(device)
                     mask_idx = sample['mask_idx'].to(device)
@@ -330,8 +331,8 @@ def run(num_epochs=50,
 
                     # Normalize size to [0, 1]
                     size -= size.min()
-                    size = size / size.max()
-                    size = 1 - size
+                    size = size / (size.max()+1)
+                    size = 1 - size + 1e-6
 
                     # Iterate the frames in this video
                     for (f, s) in enumerate(size):
@@ -367,7 +368,6 @@ def run(num_epochs=50,
 
                         # On the frame that's being shown, put a circle over the pixel
                         video[f, :, r, c] = 255.
-                        print(f, round(f / len(size) * 100 + 5))
 
                     # Rearrange dimensions and save
                     video = video.transpose(1, 0, 2, 3)

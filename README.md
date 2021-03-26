@@ -54,7 +54,7 @@ Usage
 -----
 ### Preprocessing DICOM Videos
 
-The input of EchoNet-Dynamic is an apical-4-chamber view echocardiogram video of any length. The easiest way to run our code is to use videos from our dataset, but we also provide a Jupyter Notebook, `ConvertDICOMToAVI.ipynb`, to convert DICOM files to AVI files used for input to EchoNet-Dynamic. The Notebook deidentifies the video by cropping out information outside of the ultrasound sector, resizes the input video, and saves the video in AVI format. 
+The input of EchoNet-Dynamic is an apical-4-chamber view echocardiogram video of any length. The easiest way to run our code is to use videos from our dataset, but we also provide a Jupyter Notebook, `ConvertDICOMToAVI.ipynb`, to convert DICOM files to AVI files used for input to EchoNet-Dynamic. The Notebook deidentifies the video by cropping out information outside of the ultrasound sector, resizes the input video, and saves the video in AVI format.
 
 ### Setting Path to Data
 
@@ -75,6 +75,20 @@ We describe our full hyperparameter sweep in the next section.
     python3 -c "${cmd}"
 
 This creates a directory named `output/segmentation/deeplabv3_resnet50_random/`, which will contain
+  - log.csv: training and validation losses
+  - best.pt: checkpoint of weights for the model with the lowest validation loss
+  - size.csv: estimated size of left ventricle for each frame and indicator for beginning of beat
+  - videos: directory containing videos with segmentation overlay
+
+#### Frame-by-frame Semantic Segmentation of the Right Ventricle
+
+    cmd="import echonet; echonet.utils.segmentation_rv.run(modelname=\"unet-3d-dilated-off\",
+                                                          save_segmentation=True,
+                                                          pretrained=False,
+                                                          run_test=True)”
+    python3 -c "${cmd}"
+
+This creates a directory named `output/segmentation_rv/unet-3d-dilated-off/`, which will contain
   - log.csv: training and validation losses
   - best.pt: checkpoint of weights for the model with the lowest validation loss
   - size.csv: estimated size of left ventricle for each frame and indicator for beginning of beat
