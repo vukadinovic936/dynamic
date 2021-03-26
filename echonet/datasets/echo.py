@@ -415,13 +415,14 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                     else:
                         split = 'train'
                 subj_mask_paths = glob.glob(os.path.join(mask_path, subj_id + '*.png'))
+                mask_idxes = []
                 if len(subj_mask_paths) > 0:
                     subj_list[split].append(subj_id)
-                    mask_idxes = []
                     for j, subj_mask_path in enumerate(subj_mask_paths):
                         mask_idx = int(os.path.basename(subj_mask_path).strip('.png').split('_')[1])
                         mask_idxes.append(mask_idx)
-                    data_dict[subj_id] = {'split': split, 'mask_paths': subj_mask_paths, 'video_path': subj_video_path, 'mask_idx': mask_idxes}
+                data_dict[subj_id] = {'split': split, 'mask_paths': subj_mask_paths, 'video_path': subj_video_path, 'mask_idx': mask_idxes}
+                
         print('Finished preparing', data_path)
         print('Number of videos', len(data_dict))
 
