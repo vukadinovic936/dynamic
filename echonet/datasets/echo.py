@@ -536,27 +536,33 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                         mask_idx_selected[i] = m_idx + np.random.choice([-1,0,1], 1)
             if self.img_aug:
                 if np.random.uniform() > 0.7:
-                    zoom = np.random.uniform(low=0, high=1.25)
+                    zoom = np.random.uniform(low=1, high=1.25)
                     l0 = video_clip.shape[2]
                     video_clip = scipy.ndimage.zoom(video_clip, [1,1,zoom,zoom])
                     masks_selected = scipy.ndimage.zoom(masks_selected, [1,zoom,zoom])
-                    print(video_clip.shape)
+                    masks_selected = (masks_selected>0.5).astype(float)
                     lz = video_clip.shape[2]
                     left, right = (lz-l0)//2, -(lz-l0)+(lz-l0)//2
-                    video_clip = video_clip[:,:,left:right,left:right]
-                    masks_selected = masks_selected[:,left:right,left:right]
-                    print(video_clip.shape)
+                    if right == 0:
+                        video_clip = video_clip[:,:,left:,left:]
+                        masks_selected = masks_selected[:,left:,left:]
+                    else:
+                        video_clip = video_clip[:,:,left:right,left:right]
+                        masks_selected = masks_selected[:,left:right,left:right]
                 if np.random.uniform() > 0.7:
-                    rotate = np.random.uniform(low=0, high=8)
+                    rotate = np.random.uniform(low=-8, high=8)
                     l0 = video_clip.shape[2]
-                    video_clip = scipy.ndimage.rotate(video_clip, rotate, axes=(2,3))
-                    masks_selected = scipy.ndimage.rotate(masks_selected, rotate, axes=(1,2))
-                    print(video_clip.shape)
+                    video_clip = scipy.ndimage.rotate(video_clip, rotate, axes=(2,3), mode='nearest')
+                    masks_selected = scipy.ndimage.rotate(masks_selected, rotate, axes=(1,2), mode='nearest')
+                    masks_selected = (masks_selected>0.5).astype(float)
                     lz = video_clip.shape[2]
                     left, right = (lz-l0)//2, -(lz-l0)+(lz-l0)//2
-                    video_clip = video_clip[:,:,left:right,left:right]
-                    masks_selected = masks_selected[:,left:right,left:right]
-                    print(video_clip.shape)
+                    if right == 0:
+                        video_clip = video_clip[:,:,left:,left:]
+                        masks_selected = masks_selected[:,left:,left:]
+                    else:
+                        video_clip = video_clip[:,:,left:right,left:right]
+                        masks_selected = masks_selected[:,left:right,left:right]
 
             return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected}
 
