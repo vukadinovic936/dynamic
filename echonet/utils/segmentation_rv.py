@@ -111,7 +111,7 @@ def run(num_epochs=50,
         except:
             raise ValueError('Cannot load model')
     else:
-        train_dataset = echonet.datasets.Echo_RV(split="train", fuzzy_aug=True)
+        train_dataset = echonet.datasets.Echo_RV(split="train", fuzzy_aug=True, img_aug=True)
         val_dataset = echonet.datasets.Echo_RV(split="val")
 
         train_dataloader = torch.utils.data.DataLoader(

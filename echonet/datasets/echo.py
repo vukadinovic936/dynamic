@@ -12,6 +12,7 @@ import echonet
 import h5py
 import glob
 import tqdm
+import scipy.ndimage
 
 import pdb
 
@@ -315,6 +316,8 @@ class Echo_RV(torchvision.datasets.VisionDataset):
             Defaults to 512.
         fuzzy_aug (boolean, optional): augmentation by shifting mask indexes
             Defaults to False.
+        img_aug (boolean, optional): augmentation by rotation and zoom
+            Defaults to False.
         test_mode (False, optional): cut videos into overlapping clips
             Defaults to False.
         test_overlap_stride (int, optional): mitigate inconsistent segmentation, stride step for window-sliding of clips
@@ -326,7 +329,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                  mean=0., std=1.,
                  length=32, max_length=512,
                  period=1,
-                 fuzzy_aug=False,
+                 fuzzy_aug=False, img_aug=False,
                  test_mode=False,
                  test_overlap_stride=8):
         super().__init__(root)
@@ -342,6 +345,7 @@ class Echo_RV(torchvision.datasets.VisionDataset):
         self.max_length = max_length
         self.period = period
         self.fuzzy_aug = fuzzy_aug
+        self.img_aug = img_aug
         self.test_mode = test_mode
         self.test_overlap_stride = test_overlap_stride
 
@@ -530,6 +534,29 @@ class Echo_RV(torchvision.datasets.VisionDataset):
                 for i, m_idx in enumerate(mask_idx_selected):
                     if m_idx > 0 and m_idx < video_clip.shape[1]-1:
                         mask_idx_selected[i] = m_idx + np.random.choice([-1,0,1], 1)
+            if self.img_aug:
+                if np.random.uniform() > 0.7:
+                    zoom = np.random.uniform(low=0, high=1.25)
+                    l0 = video_clip.shape[2]
+                    video_clip = scipy.ndimage.zoom(video_clip, [1,1,zoom,zoom])
+                    masks_selected = scipy.ndimage.zoom(masks_selected, [1,zoom,zoom])
+                    print(video_clip.shape)
+                    lz = video_clip.shape[2]
+                    left, right = (lz-l0)//2, -(lz-l0)+(lz-l0)//2
+                    video_clip = video_clip[:,:,left:right,left:right]
+                    masks_selected = masks_selected[:,left:right,left:right]
+                    print(video_clip.shape)
+                if np.random.uniform() > 0.7:
+                    rotate = np.random.uniform(low=0, high=8)
+                    l0 = video_clip.shape[2]
+                    video_clip = scipy.ndimage.rotate(video_clip, rotate, axes=(2,3))
+                    masks_selected = scipy.ndimage.rotate(masks_selected, rotate, axes=(1,2))
+                    print(video_clip.shape)
+                    lz = video_clip.shape[2]
+                    left, right = (lz-l0)//2, -(lz-l0)+(lz-l0)//2
+                    video_clip = video_clip[:,:,left:right,left:right]
+                    masks_selected = masks_selected[:,left:right,left:right]
+                    print(video_clip.shape)
 
             return {'video': video_clip, 'mask': masks_selected, 'mask_idx': mask_idx_selected}
 
