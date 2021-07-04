@@ -22,5 +22,5 @@ for filename in ["echonet.cfg",
 
 CONFIG = types.SimpleNamespace(
     FILENAME=_FILENAME,
-    DATA_DIR=_PARAM.get("data_dir", "a4c-video-dir/"),
-    DATA_DIR_LIST=ast.literal_eval(_PARAM.get("data_dir_list", ["a4c-video-dir/"])))
+    DATA_DIR=_PARAM.get("data_dir", "/workspace/data/NAS/RV-Milos/RV_data"),
+    DATA_DIR_LIST=ast.literal_eval(_PARAM.get("data_dir_list", ["/workspace/data/NAS/RV-Milos/RV_data"])))

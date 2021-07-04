@@ -194,8 +194,9 @@ def run(num_epochs=50,
                     f.write("{} dice (overall): {:.4f} ({:.4f} - {:.4f})\n".format(split, *echonet.utils.bootstrap(inter, union, echonet.utils.dice_similarity_coefficient)))
                     f.flush()
 
-    # Saving videos with segmentations
-    dataset = echonet.datasets.Echo_RV(split="test", test_mode=True)
+    ### Saving videos with segmentations
+    ### SETT BACK
+    dataset = echonet.datasets.Echo_RV(split="val", test_mode=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, pin_memory=False)
 
     # Save videos with segmentation
@@ -228,7 +229,7 @@ def run(num_epochs=50,
                     mask_idx = mask_idx.squeeze(0)
                     mask = mask.squeeze(0)
                     pred_logit = []
-                    num_bs = 8
+                    num_bs = 1
                     for ii in range(0, video.shape[0], num_bs):
                         model_output = model(video[ii:min(ii+num_bs,video.shape[0])])
                         pred_logit.append(model_output)

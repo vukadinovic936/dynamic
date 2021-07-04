@@ -5,3 +5,6 @@ echonet.cfg
 .echonet.cfg
 *.pyc
 echonet.egg-info/
+*.h5
+*.json
+data

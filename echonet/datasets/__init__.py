@@ -5,5 +5,6 @@ echocardiogram videos.
 
 from .echo import Echo
 from .echo import Echo_RV
+from .echo import Echo_RV_Video
 
-__all__ = ["Echo", "Echo_RV"]
+__all__ = ["Echo", "Echo_RV", "Echo_RV_Video"]
